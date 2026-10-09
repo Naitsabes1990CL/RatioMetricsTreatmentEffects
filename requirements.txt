@@ -1,0 +1,28 @@
+# Core numerical stack
+# numpy >=2.1 is the first release with Python 3.13 wheels; below that pip
+# falls back to a source build and requires an MSVC toolchain.
+numpy>=2.4,<3.0
+pandas>=3.0,<4.0
+scipy>=1.18,<2.0
+
+# Visualization
+matplotlib>=3.11,<4.0
+seaborn>=0.13.2,<0.14
+
+# Machine learning
+scikit-learn>=1.9,<2.0
+
+# Econometrics / causal inference
+pyfixest>=0.60,<0.61
+econml>=0.17,<0.18
+causalpy>=0.9,<0.10
+
+# Notebooks
+jupyter>=1.1,<2.0
+ipykernel>=7.3,<8.0
+
+# Utilities
+tqdm>=4.70,<5.0
+joblib>=1.5,<2.0
+statsmodels>=0.15,<0.16
+markitdown==0.1.7
