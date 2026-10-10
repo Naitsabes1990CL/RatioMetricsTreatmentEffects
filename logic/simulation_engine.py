@@ -163,6 +163,62 @@ def run_study(
     return pd.concat(frames, ignore_index=True)
 
 
+def bias_coverage_summary(
+    df: pd.DataFrame,
+    group_cols: tuple[str, ...] = ("estimator",),
+    level: float = 0.95,
+) -> pd.DataFrame:
+    """Bias, spread, and CI coverage per estimator (and grouping).
+
+    Expects a tidy frame with per-replication columns ``estimate``,
+    ``se`` and ``true_value`` (constant within each group). Coverage
+    is the fraction of replications whose normal interval
+    ``estimate +/- z * se`` contains ``true_value``.
+
+    Args:
+        df: Tidy per-replication results (e.g. from
+            ``logic.iroas_models.iroas_inference``).
+        group_cols: Columns defining one summary row each.
+        level: Nominal two-sided confidence level.
+
+    Raises:
+        ValueError: If ``level`` is outside ``(0, 1)``.
+
+    Returns:
+        One row per group with columns ``true_value``, ``mean``,
+        ``bias``, ``rel_bias_pct``, ``emp_sd``, ``mean_se`` and
+        ``coverage`` (``nan`` throughout when the group's
+        ``true_value`` is ``nan`` — no stable target to be biased
+        against).
+    """
+    if not 0.0 < level < 1.0:
+        raise ValueError(f"level must be in (0, 1), got {level}")
+    # Reason: scipy is imported lazily so the engine stays
+    # numpy/pandas-only for models that never need coverage tables.
+    from scipy import stats as _stats
+
+    z = _stats.norm.ppf(0.5 + level / 2.0)
+    rows = []
+    for keys, g in df.groupby(list(group_cols), sort=False):
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        true = g["true_value"].iloc[0]
+        est, se = g["estimate"], g["se"]
+        covered = (est - z * se <= true) & (true <= est + z * se)
+        rows.append(
+            dict(zip(group_cols, keys))
+            | {
+                "true_value": true,
+                "mean": est.mean(),
+                "bias": est.mean() - true,
+                "rel_bias_pct": 100.0 * (est.mean() - true) / true,
+                "emp_sd": est.std(),
+                "mean_se": se.mean(),
+                "coverage": covered.mean(),
+            }
+        )
+    return pd.DataFrame(rows).set_index(list(group_cols))
+
+
 def run_scenarios(
     scenarios: dict[str, PotentialOutcomeModel],
     n: int,

@@ -282,13 +282,39 @@ def fit_size_interaction(
     return {"rho0": rho0_hat, "delta": delta_hat}
 
 
+def trim_mask(
+    dy: np.ndarray, dx: np.ndarray, trim: float
+) -> np.ndarray:
+    """Boolean mask of units kept after per-unit-ratio trimming.
+
+    Units whose per-unit ratio ``dy/dx`` falls in the lower or upper
+    ``trim`` tail (per replication) are dropped.
+
+    Args:
+        dy: Response differences, shape ``(n_reps, n)``.
+        dx: Regressor differences, shape ``(n_reps, n)``.
+        trim: Tail fraction trimmed on each side, in ``[0, 0.5)``.
+
+    Raises:
+        ValueError: If ``trim`` is outside ``[0, 0.5)``.
+
+    Returns:
+        Boolean array, shape ``(n_reps, n)``, True for kept units.
+    """
+    if not 0.0 <= trim < 0.5:
+        raise ValueError(f"trim must be in [0, 0.5), got {trim}")
+    ratios = dy / dx
+    lo = np.quantile(ratios, trim, axis=-1, keepdims=True)
+    hi = np.quantile(ratios, 1.0 - trim, axis=-1, keepdims=True)
+    return (ratios >= lo) & (ratios <= hi)
+
+
 def trimmed_ratio(
     dy: np.ndarray, dx: np.ndarray, trim: float = 0.05
 ) -> np.ndarray:
     """Aggregate ratio after trimming extreme per-unit ratios.
 
-    Drops the units whose per-unit ratio ``dy/dx`` falls in the lower
-    or upper ``trim`` tail (per replication), then returns
+    Drops the units selected by :func:`trim_mask`, then returns
     ``sum(dy) / sum(dx)`` on the remainder — a Trimmed-Match-flavored
     robustification of the aggregate iROAS estimator.
 
@@ -303,12 +329,86 @@ def trimmed_ratio(
     Returns:
         Per-replication trimmed aggregate ratios.
     """
-    if not 0.0 <= trim < 0.5:
-        raise ValueError(f"trim must be in [0, 0.5), got {trim}")
-    ratios = dy / dx
-    lo = np.quantile(ratios, trim, axis=-1, keepdims=True)
-    hi = np.quantile(ratios, 1.0 - trim, axis=-1, keepdims=True)
-    keep = (ratios >= lo) & (ratios <= hi)
+    keep = trim_mask(dy, dx, trim)
     num = np.sum(np.where(keep, dy, 0.0), axis=-1)
     den = np.sum(np.where(keep, dx, 0.0), axis=-1)
     return num / den
+
+
+def se_avg_of_ratios(dy: np.ndarray, dx: np.ndarray) -> np.ndarray:
+    """Standard error of the mean of per-unit ratios.
+
+    The plain i.i.d. standard error ``sd(dy/dx) / sqrt(n)`` per
+    replication — the interval a practitioner reporting an average of
+    per-geo ratios would attach to it.
+
+    Args:
+        dy: Response differences, shape ``(n_reps, n)``.
+        dx: Regressor differences, shape ``(n_reps, n)``.
+
+    Returns:
+        Per-replication standard errors.
+    """
+    ratios = dy / dx
+    n = ratios.shape[-1]
+    return np.std(ratios, axis=-1, ddof=1) / np.sqrt(n)
+
+
+def se_aggregate_ratio(
+    dy: np.ndarray,
+    dx: np.ndarray,
+    keep: np.ndarray | None = None,
+) -> np.ndarray:
+    """Linearization standard error of ``sum(dy) / sum(dx)``.
+
+    Taylor (delta-method) variance of the classical ratio estimator
+    with i.i.d. units: ``sqrt(n/(n-1) * sum(e_i^2)) / |sum(dx)|``
+    with residuals ``e_i = dy_i - theta_hat * dx_i``. With ``keep``,
+    the formula is applied to the kept units only (conditional on the
+    trim — the data-dependence of trimming is ignored, as in common
+    practice).
+
+    Args:
+        dy: Response differences, shape ``(n_reps, n)``.
+        dx: Regressor differences, shape ``(n_reps, n)``.
+        keep: Optional boolean mask of units to use.
+
+    Returns:
+        Per-replication standard errors.
+    """
+    if keep is None:
+        keep = np.ones_like(dy, dtype=bool)
+    dy_k = np.where(keep, dy, 0.0)
+    dx_k = np.where(keep, dx, 0.0)
+    n_k = keep.sum(axis=-1)
+    theta = np.sum(dy_k, axis=-1) / np.sum(dx_k, axis=-1)
+    resid = np.where(keep, dy - theta[..., None] * dx, 0.0)
+    ss = np.sum(resid**2, axis=-1)
+    return np.sqrt(ss * n_k / (n_k - 1)) / np.abs(
+        np.sum(dx_k, axis=-1)
+    )
+
+
+def se_wls_through_origin(
+    dy: np.ndarray, dx: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    """Heteroskedasticity-robust (HC1) SE of the WLS slope.
+
+    Sandwich variance for :func:`wls_through_origin`:
+    ``sum(w^2 dx^2 e^2) / (sum(w dx^2))^2`` with an ``n/(n-1)``
+    small-sample factor.
+
+    Args:
+        dy: Response differences, shape ``(n_reps, n)``.
+        dx: Regressor differences, shape ``(n_reps, n)``.
+        weights: Per-unit weights, shape ``(n_reps, n)``.
+
+    Returns:
+        Per-replication standard errors.
+    """
+    n = dy.shape[-1]
+    beta = wls_through_origin(dy, dx, weights)
+    resid = dy - beta[..., None] * dx
+    bread = np.sum(weights * dx**2, axis=-1)
+    meat = np.sum(weights**2 * dx**2 * resid**2, axis=-1)
+    return np.sqrt(meat * n / (n - 1)) / bread
