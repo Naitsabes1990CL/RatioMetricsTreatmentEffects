@@ -65,10 +65,4 @@ New data-generating processes plug in by subclassing
 `estimators`, and optionally `analytic_tau` / `reference_values`); the
 engine, plotting helpers, and notebook patterns need no changes.
 
-### Initialize Claude Code
 
-```powershell
-C:\Users\Sebastian\.local\bin\claude
-```
-
-Run this from the project root. Claude will pick up `CLAUDE.md` automatically for project context.

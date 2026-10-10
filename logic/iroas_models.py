@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 from logic import likelihoods
@@ -216,6 +217,69 @@ def _ratio_of_aggregates(data: RatioTrialData) -> np.ndarray:
     dr = data.revenue1 - data.revenue0
     dc = data.cost1 - data.cost0
     return np.sum(dr, axis=-1) / np.sum(dc, axis=-1)
+
+
+def iroas_inference(
+    model: GeoiROASModel, data: RatioTrialData
+) -> pd.DataFrame:
+    """Per-replication estimates AND standard errors, tidy format.
+
+    Pairs each of the model's four estimators with the confidence
+    interval a practitioner would attach to it: the i.i.d. SE for the
+    average of per-geo ratios, the delta-method linearization SE for
+    the (trimmed) aggregate ratio, and the HC1 sandwich SE for the
+    WLS slope. Used for the bias/coverage tables in the case-study
+    notebook.
+
+    Args:
+        model: The configured geo experiment.
+        data: Payload returned by ``model.draw``.
+
+    Returns:
+        Tidy DataFrame with columns ``estimator``, ``rep``,
+        ``estimate``, ``se`` and ``true_value`` (``rho0`` in the
+        constant-rho world, ``nan`` in the heterogeneous world where
+        no single target exists).
+    """
+    dr = data.revenue1 - data.revenue0
+    dc = data.cost1 - data.cost0
+    weights = 1.0 / model.noise_scale(data.gamma) ** 2
+    keep = likelihoods.trim_mask(dr, dc, model.trim)
+    results: dict[str, tuple[np.ndarray, np.ndarray]] = {
+        "avg_of_geo_ratios": (
+            _avg_of_geo_ratios(data),
+            likelihoods.se_avg_of_ratios(dr, dc),
+        ),
+        "ratio_of_aggregates": (
+            _ratio_of_aggregates(data),
+            likelihoods.se_aggregate_ratio(dr, dc),
+        ),
+        "trimmed_ratio": (
+            likelihoods.trimmed_ratio(dr, dc, trim=model.trim),
+            likelihoods.se_aggregate_ratio(dr, dc, keep=keep),
+        ),
+        "wls_regression": (
+            likelihoods.wls_through_origin(dr, dc, weights),
+            likelihoods.se_wls_through_origin(dr, dc, weights),
+        ),
+    }
+    true = (
+        model.rho0 if model.rho_size_exponent == 0.0 else np.nan
+    )
+    n_reps = dr.shape[0]
+    frames = [
+        pd.DataFrame(
+            {
+                "estimator": name,
+                "rep": np.arange(n_reps),
+                "estimate": est,
+                "se": se,
+                "true_value": true,
+            }
+        )
+        for name, (est, se) in results.items()
+    ]
+    return pd.concat(frames, ignore_index=True)
 
 
 def randomize_assignment(
